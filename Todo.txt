@@ -1,0 +1,11 @@
+- sachnummer bzw motortyp automatisch erkennen (liste snr motortypen, ab welcher stelle in ID -> Nadine erinnern) 
+- kmg hinzufügen (vielleicht oberbegriff messraum?) 
+- immer eine person in cc drin damit nichts vergessen wird bzw keine missverständnisse entstehen  (z.b. maik dauerhaft) 
+- gruppenweise auswählen (gruppe 1, gruppe 2 etc., eol, emo, messraum, versand), vielleicht auch mit untergruppen z.b. emo -> maik// stator -> aydin etc 
+- mehrfachauswahl von Motoren 
+- verbindung pla oder databricks ( stationsspezifischere ansicht -> wo war er wann etc) 
+- sondermessungen markieren bzw dringliche messungen 
+- code kommentieren!! kurze anleitung bzw zusammenfassung schreiben, verfügbar bzw leicht auffindbar machen (für weitere Programmierer verständlich machen) 
+- pflichtfelder einfügen(nochmal maik u. aydin fragen) vielleicht alle außer kommentare u. anmerkungen ? 
+- bearbeiterliste hinzufügen( bis jetzt nur Tom lol) 
+- herausfinden über wen wir es hochladen können (Andre Christophel ansonsten DFC rumfragen) 

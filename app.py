@@ -1,3 +1,22 @@
+"""
+Motor Auftragssteuerung – Flask Web App
+=======================================
+Verwaltet Motor-/Statorzustände und koordiniert Abholaufträge.
+
+Starten:        python app.py  →  http://localhost:5000
+Abhängigkeiten: pip install flask
+Datenbank:      SQLite, wird beim ersten Start automatisch erstellt (stator_status.db)
+
+Haupttabellen:
+  motor_entries   – ein Datensatz pro erfasstem Motor
+  request_persons – Personen, die als Profil oder Abholverantwortliche wählbar sind
+  person_groups   – optionale Gruppen zur Strukturierung der Personenliste
+
+Wichtige Konstanten (oben in dieser Datei):
+  MOTOR_TYPES       – gültige Motortypen (Dropdown + Validierung)
+  STORAGE_LOCATIONS – gültige Lagerorte   (Dropdown + Validierung)
+"""
+
 from __future__ import annotations
 
 import sqlite3
@@ -13,6 +32,8 @@ BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "stator_status.db"
 SECRET_KEY = "stator-status-demo-secret-key-change-me"
 
+# Motortypen und Lagerorte werden app-weit für Dropdowns und Validierung genutzt.
+# Neue Einträge hier ergänzen – keine weiteren Anpassungen nötig.
 MOTOR_TYPES = [
     "Ros",
     "Ran High RH",
@@ -29,6 +50,15 @@ DEFAULT_REQUEST_PERSONS = [
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = SECRET_KEY
+
+# ---------------------------------------------------------------------------
+# HTML-Template (Jinja2)
+# ---------------------------------------------------------------------------
+# Das gesamte Frontend ist in diesem einzigen String definiert.
+# Variablen, die render_page() übergibt: current_view, current_profile,
+# request_persons, groups, grouped_persons, motor_types, storage_locations,
+# default_date, default_time, stats, status_by_location, entries.
+# ---------------------------------------------------------------------------
 
 TEMPLATE = r"""
 <!doctype html>
@@ -519,12 +549,6 @@ TEMPLATE = r"""
       padding: 14px 16px;
     }
 
-    .menu-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 18px;
-    }
-
     .danger-box {
       border: 1px solid rgba(220,38,38,0.2);
       background: rgba(254,242,242,0.9);
@@ -538,8 +562,14 @@ TEMPLATE = r"""
       font-size: 0.9rem;
     }
 
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 18px;
+    }
+
     @media (max-width: 1100px) {
-      .grid, .menu-grid, .cards-4, .cards-2 { grid-template-columns: 1fr; }
+      .grid, .cards-4, .cards-2 { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 760px) {
@@ -563,7 +593,7 @@ TEMPLATE = r"""
 
         <div class="profile-box">
           <div><strong>Aktuelles Benutzerprofil:</strong> {{ current_profile or 'Nicht gesetzt' }}</div>
-          <small>Jeder Browser / Rechner kann ein eigenes Profil wählen. Dadurch funktionieren „Meine offenen Abholungen“ pro Benutzer.</small>
+          <small>Jeder Browser / Rechner kann ein eigenes Profil wählen. Dadurch funktionieren „Meine offenen Abholungen" pro Benutzer.</small>
           <form method="post" action="{{ url_for('set_profile') }}">
             <input type="hidden" name="next" value="{{ request.path }}">
             <div class="inline-form">
@@ -664,8 +694,18 @@ TEMPLATE = r"""
                   <label for="pickup_assigned_to">Abholung zuweisen an</label>
                   <select id="pickup_assigned_to" name="pickup_assigned_to">
                     <option value="">Nicht zugewiesen</option>
-                    {% for person in request_persons %}
-                      <option value="{{ person.name }}">{{ person.name }}</option>
+                    {% for group_name, group_persons in grouped_persons %}
+                      {% if group_name %}
+                        <optgroup label="{{ group_name }}">
+                          {% for person in group_persons %}
+                            <option value="{{ person.name }}">{{ person.name }}</option>
+                          {% endfor %}
+                        </optgroup>
+                      {% else %}
+                        {% for person in group_persons %}
+                          <option value="{{ person.name }}">{{ person.name }}</option>
+                        {% endfor %}
+                      {% endif %}
                     {% endfor %}
                   </select>
                 </div>
@@ -804,10 +844,44 @@ TEMPLATE = r"""
       <section class="panel">
         <div class="panel-head">
           <h2>Menü / Einstellungen</h2>
-          <p class="note">Vordefinierte Personen verwalten und Datenbank leeren.</p>
+          <p class="note">Gruppen und Personen verwalten sowie Datenbankinhalte leeren.</p>
         </div>
         <div class="panel-body">
-          <div class="menu-grid">
+          <div class="settings-grid">
+
+            {# ---- Gruppen verwalten ---- #}
+            <section class="panel soft">
+              <div class="panel-head">
+                <h3>Gruppen verwalten</h3>
+                <p class="note">Gruppen strukturieren die Personenliste in allen Dropdowns.</p>
+              </div>
+              <div class="panel-body">
+                <form method="post" action="{{ url_for('add_group') }}">
+                  <div>
+                    <label for="group_name">Gruppenname</label>
+                    <input id="group_name" name="group_name" type="text" placeholder="z. B. EoL, EMO, Messraum" required>
+                  </div>
+                  <div class="actions">
+                    <button class="btn btn-primary" type="submit">Gruppe anlegen</button>
+                  </div>
+                </form>
+                <div class="list" style="margin-top: 18px;">
+                  {% for group in groups %}
+                    <div class="list-item">
+                      <strong>{{ group.name }}</strong>
+                      <form method="post" action="{{ url_for('delete_group', group_id=group.id) }}"
+                            onsubmit="return confirm('Gruppe löschen? Personen in dieser Gruppe werden keiner Gruppe zugewiesen.');">
+                        <button class="btn btn-secondary btn-icon" type="submit" title="Gruppe löschen">🗑️</button>
+                      </form>
+                    </div>
+                  {% else %}
+                    <div class="empty">Noch keine Gruppen angelegt.</div>
+                  {% endfor %}
+                </div>
+              </div>
+            </section>
+
+            {# ---- Personen verwalten ---- #}
             <section class="panel soft">
               <div class="panel-head">
                 <h3>Personen für Anforderung und Profile</h3>
@@ -824,6 +898,15 @@ TEMPLATE = r"""
                       <label for="person_email">E-Mail (optional)</label>
                       <input id="person_email" name="person_email" type="email" placeholder="name@firma.de">
                     </div>
+                    <div class="full">
+                      <label for="person_group_id">Gruppe (optional)</label>
+                      <select id="person_group_id" name="group_id">
+                        <option value="">Keine Gruppe</option>
+                        {% for group in groups %}
+                          <option value="{{ group.id }}">{{ group.name }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
                   </div>
                   <div class="actions">
                     <button class="btn btn-primary" type="submit">Person speichern</button>
@@ -832,12 +915,25 @@ TEMPLATE = r"""
 
                 <div class="list" style="margin-top: 18px;">
                   {% for person in request_persons %}
-                    <div class="list-item">
-                      <div>
+                    <div class="list-item" style="flex-wrap: wrap; gap: 10px;">
+                      <div style="flex: 1; min-width: 120px;">
                         <strong>{{ person.name }}</strong>
                         <small>{{ person.email or 'Keine E-Mail hinterlegt' }}</small>
                       </div>
-                      <form method="post" action="{{ url_for('delete_person', person_id=person.id) }}" onsubmit="return confirm('Person wirklich löschen?');">
+                      <form method="post" action="{{ url_for('update_person_group', person_id=person.id) }}"
+                            style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                        <select name="group_id"
+                                style="padding: 7px 10px; border-radius: 10px; border: 1px solid var(--border); font: inherit; font-size: 0.9rem; background: white;">
+                          <option value="">Keine Gruppe</option>
+                          {% for group in groups %}
+                            <option value="{{ group.id }}" {% if person.group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
+                          {% endfor %}
+                        </select>
+                        <button class="btn btn-secondary" type="submit"
+                                style="padding: 7px 12px; font-size: 0.9rem; min-height: auto;">Gruppe speichern</button>
+                      </form>
+                      <form method="post" action="{{ url_for('delete_person', person_id=person.id) }}"
+                            onsubmit="return confirm('Person wirklich löschen?');">
                         <button class="btn btn-secondary btn-icon" type="submit" title="Person löschen">🗑️</button>
                       </form>
                     </div>
@@ -848,6 +944,7 @@ TEMPLATE = r"""
               </div>
             </section>
 
+            {# ---- Datenbank verwalten ---- #}
             <section class="panel soft">
               <div class="panel-head">
                 <h3>Datenbank verwalten</h3>
@@ -868,6 +965,7 @@ TEMPLATE = r"""
                 </div>
               </div>
             </section>
+
           </div>
         </div>
       </section>
@@ -943,7 +1041,12 @@ TEMPLATE = r"""
 """
 
 
+# ---------------------------------------------------------------------------
+# Datenbankzugriff
+# ---------------------------------------------------------------------------
+
 def get_db() -> sqlite3.Connection:
+    """Gibt die DB-Verbindung für den aktuellen Request-Kontext zurück (lazy init)."""
     if "db" not in g:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -973,6 +1076,7 @@ def get_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
 
 
 def ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, definition: str) -> None:
+    """Fügt eine Spalte hinzu, falls sie noch nicht existiert (idempotent, sicher für Migrationen)."""
     columns = get_columns(conn, table_name)
     if column_name not in columns:
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
@@ -988,6 +1092,7 @@ def seed_default_persons(conn: sqlite3.Connection) -> None:
 
 
 def migrate_old_entries(conn: sqlite3.Connection) -> None:
+    """Migriert Altdaten aus der früheren Tabelle stator_entries in motor_entries (einmalig)."""
     if not table_exists(conn, "stator_entries"):
         return
     existing = conn.execute("SELECT COUNT(*) FROM motor_entries").fetchone()[0]
@@ -1031,6 +1136,14 @@ def migrate_old_entries(conn: sqlite3.Connection) -> None:
 
 
 def init_db() -> None:
+    """
+    Erstellt alle Tabellen beim ersten Start und führt Migrationen durch.
+
+    Tabellen:
+      motor_entries   – Kerntabelle; ein Eintrag pro Motor mit Abholverlauf
+      request_persons – Personen für Profil-Auswahl und Abholzuweisung
+      person_groups   – optionale Gruppen zur Strukturierung der Personenliste
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
 
@@ -1071,6 +1184,17 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
             email TEXT,
+            group_id INTEGER REFERENCES person_groups(id),
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS person_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
             created_at TEXT NOT NULL
         )
         """
@@ -1094,16 +1218,30 @@ def init_db() -> None:
     }.items():
         ensure_column(conn, "motor_entries", column_name, definition)
 
+    # group_id-Spalte nachrüsten falls DB aus älterer Version stammt
+    ensure_column(conn, "request_persons", "group_id", "INTEGER REFERENCES person_groups(id)")
+
     migrate_old_entries(conn)
     seed_default_persons(conn)
     conn.commit()
     conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Template-Global: HTML-Tabelle für Einträge
+# ---------------------------------------------------------------------------
+
 @app.template_global()
 def entries_table(entries: list[dict[str, Any]], current_profile: str | None, current_view: str) -> str:
+    """
+    Rendert die Eintrags-Tabelle als HTML-String (wird per |safe im Template ausgegeben).
+    Enthält für jeden Eintrag einen aufklappbaren Editor mit Abholsteuerung.
+    """
     if not entries:
         return '<div class="empty">Keine passenden Einträge vorhanden.</div>'
+
+    # Personen einmalig laden, damit die Schleife nicht für jeden Eintrag erneut abfragt
+    persons = get_request_persons()
 
     rows = []
     for entry in entries:
@@ -1205,8 +1343,7 @@ def entries_table(entries: list[dict[str, Any]], current_profile: str | None, cu
         <div>
           <label>Abholung zuweisen an</label>
           <select name="pickup_assigned_to">
-            <option value="">Nicht zugewiesen</option>
-            {''.join(f'<option value="{person["name"]}" {"selected" if entry["pickup_assigned_to"] == person["name"] else ""}>{person["name"]}</option>' for person in get_request_persons())}
+            {_person_options_html(entry['pickup_assigned_to'], persons)}
           </select>
         </div>
         <div class="full">
@@ -1287,9 +1424,67 @@ def entries_table(entries: list[dict[str, Any]], current_profile: str | None, cu
 '''
 
 
+# ---------------------------------------------------------------------------
+# Hilfsfunktionen
+# ---------------------------------------------------------------------------
+
 def get_request_persons() -> list[sqlite3.Row]:
+    """Gibt alle Personen inkl. Gruppenname zurück, sortiert nach Gruppe → Name."""
     db = get_db()
-    return db.execute("SELECT id, name, email FROM request_persons ORDER BY name COLLATE NOCASE").fetchall()
+    return db.execute(
+        """
+        SELECT r.id, r.name, r.email, r.group_id, g.name AS group_name
+        FROM request_persons r
+        LEFT JOIN person_groups g ON r.group_id = g.id
+        ORDER BY g.name COLLATE NOCASE, r.name COLLATE NOCASE
+        """
+    ).fetchall()
+
+
+def get_groups() -> list[sqlite3.Row]:
+    """Gibt alle Gruppen alphabetisch sortiert zurück."""
+    db = get_db()
+    return db.execute(
+        "SELECT id, name FROM person_groups ORDER BY name COLLATE NOCASE"
+    ).fetchall()
+
+
+def _group_persons(persons: list[sqlite3.Row]) -> list[tuple[str | None, list]]:
+    """
+    Gruppiert eine sortierte Personenliste für Dropdown-Rendering.
+    None = ungrupiert → flache <option>-Elemente; String = Gruppenname → <optgroup>.
+    """
+    result: list[tuple[str | None, list]] = []
+    current_group: str | None = "\x00"  # Sentinel
+    current_list: list = []
+    for person in persons:
+        group: str | None = person["group_name"]
+        if group != current_group:
+            if current_list:
+                result.append((current_group, current_list))
+            current_group = group
+            current_list = []
+        current_list.append(person)
+    if current_list:
+        result.append((current_group, current_list))
+    return result
+
+
+def _person_options_html(selected: str | None, persons: list[sqlite3.Row]) -> str:
+    """
+    Erzeugt <option>/<optgroup>-HTML für einen Personen-Dropdown.
+    Ungrupierte Personen erscheinen als flache <option>-Elemente ohne Wrapper.
+    """
+    html = ['<option value="">Nicht zugewiesen</option>']
+    for group_name, group_persons in _group_persons(persons):
+        if group_name:
+            html.append(f'<optgroup label="{escape(group_name)}">')
+        for person in group_persons:
+            sel = " selected" if selected == person["name"] else ""
+            html.append(f'<option value="{escape(person["name"])}"{sel}>{escape(person["name"])}</option>')
+        if group_name:
+            html.append("</optgroup>")
+    return "".join(html)
 
 
 def current_profile() -> str:
@@ -1310,6 +1505,10 @@ def now_parts() -> tuple[str, str]:
 
 
 def derive_pickup_status(row: sqlite3.Row | dict[str, Any]) -> str:
+    """
+    Leitet den Abholstatus aus den DB-Feldern ab (kein eigenes Statusfeld).
+    Reihenfolge: picked_up → started → assigned → Offen
+    """
     if int(row["picked_up"] or 0) == 1:
         return "Abgeholt"
     if row["pickup_started_by"]:
@@ -1337,6 +1536,13 @@ def build_mailto_url(entry: sqlite3.Row | dict[str, Any]) -> str:
 
 
 def fetch_entries_for_view(view: str, profile_name: str | None) -> list[dict[str, Any]]:
+    """
+    Lädt und filtert Einträge je nach aktiver View:
+      dashboard  – neueste 40 Einträge
+      mine       – offen + dem aktuellen Profil zugewiesen
+      requested  – alle offenen mit Zuweisung
+      completed  – bereits abgeholt
+    """
     db = get_db()
     rows = db.execute(
         """
@@ -1367,16 +1573,19 @@ def fetch_entries_for_view(view: str, profile_name: str | None) -> list[dict[str
 
 
 def fetch_stats(profile_name: str) -> dict[str, int]:
+    """Berechnet die Kennzahlen für die Dashboard-Übersichtskarten."""
     db = get_db()
     rows = db.execute("SELECT * FROM motor_entries").fetchall()
     total = len(rows)
     io = sum(1 for row in rows if row["status"] == "iO")
-    open_nio = sum(1 for row in rows if derive_pickup_status(row) in {"Offen", "Angefordert", "In Bearbeitung"})
+    # niO / wiO zählen nach Motor-Status, unabhängig vom Abholstatus
+    open_nio = sum(1 for row in rows if row["status"] == "niO")
+    open_wio = sum(1 for row in rows if row["status"] == "wiO")
     my_open = sum(
         1 for row in rows
         if int(row["picked_up"] or 0) == 0 and row["pickup_assigned_to"] == profile_name
     ) if profile_name else 0
-    return {"total": total, "io": io, "open_nio": open_nio, "my_open": my_open}
+    return {"total": total, "io": io, "open_nio": open_nio, "open_wio": open_wio, "my_open": my_open}
 
 
 def fetch_status_by_location() -> list[dict[str, int | str]]:
@@ -1431,12 +1640,15 @@ def fetch_status_by_location() -> list[dict[str, int | str]]:
 def render_page(view: str) -> str:
     now = datetime.now()
     profile_name = current_profile()
+    persons = get_request_persons()
     return render_template_string(
         TEMPLATE,
         current_view=view,
         current_profile=profile_name,
-        request_persons=get_request_persons(),
-        person_names=[p["name"] for p in get_request_persons()],
+        request_persons=persons,
+        person_names=[p["name"] for p in persons],
+        groups=get_groups(),
+        grouped_persons=_group_persons(persons),
         motor_types=MOTOR_TYPES,
         storage_locations=STORAGE_LOCATIONS,
         default_date=now.strftime("%Y-%m-%d"),
@@ -1455,6 +1667,10 @@ def valid_next(default_endpoint: str = "dashboard") -> str:
         return nxt
     return url_for(default_endpoint)
 
+
+# ---------------------------------------------------------------------------
+# Routen – Seiten
+# ---------------------------------------------------------------------------
 
 @app.route("/")
 def root() -> Any:
@@ -1486,6 +1702,10 @@ def settings() -> str:
     return render_page("settings")
 
 
+# ---------------------------------------------------------------------------
+# Routen – Profil
+# ---------------------------------------------------------------------------
+
 @app.route("/set-profile", methods=["POST"])
 def set_profile() -> Any:
     profile_name = request.form.get("profile_name", "").strip()
@@ -1496,6 +1716,10 @@ def set_profile() -> Any:
         flash(f"Benutzerprofil auf '{profile_name}' gesetzt.", "success")
     return redirect(valid_next())
 
+
+# ---------------------------------------------------------------------------
+# Routen – Motor-Einträge
+# ---------------------------------------------------------------------------
 
 @app.route("/save", methods=["POST"])
 def save_entry() -> Any:
@@ -1582,15 +1806,12 @@ def update_entry(entry_id: int) -> Any:
     pickup_assigned_to = request.form.get("pickup_assigned_to", "").strip()
     pickup_assigned_email = lookup_person_email(pickup_assigned_to) if pickup_assigned_to else ""
     pickup_request_comment = request.form.get("pickup_request_comment", "").strip()
-    pickup_assigned_to = request.form.get("pickup_assigned_to", "").strip()
-    pickup_assigned_email = lookup_person_email(pickup_assigned_to) if pickup_assigned_to else ""
-    pickup_request_comment = request.form.get("pickup_request_comment", "").strip()
     picked_up = 1 if request.form.get("picked_up") == "1" else 0
     pickup_done_by = request.form.get("pickup_done_by", "").strip()
     pickup_done_date = request.form.get("pickup_done_date", "").strip()
     pickup_done_time = request.form.get("pickup_done_time", "").strip()
 
-    if motor_type not in MOTOR_TYPES or status not in {"iO", "niO"} or storage_location not in STORAGE_LOCATIONS:
+    if motor_type not in MOTOR_TYPES or status not in {"iO", "niO", "wiO"} or storage_location not in STORAGE_LOCATIONS:
         flash("Ungültige Eingabedaten erkannt.", "error")
         return redirect(valid_next())
 
@@ -1753,10 +1974,17 @@ def toggle_picked_up(entry_id: int) -> Any:
     return redirect(valid_next())
 
 
+# ---------------------------------------------------------------------------
+# Routen – Personen und Gruppen (Einstellungen)
+# ---------------------------------------------------------------------------
+
 @app.route("/settings/persons/add", methods=["POST"])
 def add_person() -> Any:
     name = request.form.get("person_name", "").strip()
     email = request.form.get("person_email", "").strip()
+    group_id_str = request.form.get("group_id", "").strip()
+    group_id = int(group_id_str) if group_id_str else None
+
     if not name:
         flash("Bitte einen Namen eingeben.", "error")
         return redirect(url_for("settings"))
@@ -1764,8 +1992,8 @@ def add_person() -> Any:
     db = get_db()
     try:
         db.execute(
-            "INSERT INTO request_persons (name, email, created_at) VALUES (?, ?, ?)",
-            (name, email, datetime.now().isoformat(timespec="seconds")),
+            "INSERT INTO request_persons (name, email, group_id, created_at) VALUES (?, ?, ?, ?)",
+            (name, email, group_id, datetime.now().isoformat(timespec="seconds")),
         )
         db.commit()
         flash(f"Person '{name}' gespeichert.", "success")
@@ -1786,6 +2014,56 @@ def delete_person(person_id: int) -> Any:
     flash(f"Person '{row['name']}' gelöscht.", "success")
     return redirect(url_for("settings"))
 
+
+@app.route("/settings/persons/<int:person_id>/group", methods=["POST"])
+def update_person_group(person_id: int) -> Any:
+    """Weist einer Person eine (andere) Gruppe zu oder entfernt die Gruppenzuweisung."""
+    group_id_str = request.form.get("group_id", "").strip()
+    group_id = int(group_id_str) if group_id_str else None
+    db = get_db()
+    db.execute("UPDATE request_persons SET group_id = ? WHERE id = ?", (group_id, person_id))
+    db.commit()
+    flash("Gruppe aktualisiert.", "success")
+    return redirect(url_for("settings"))
+
+
+@app.route("/settings/groups/add", methods=["POST"])
+def add_group() -> Any:
+    name = request.form.get("group_name", "").strip()
+    if not name:
+        flash("Bitte einen Gruppennamen eingeben.", "error")
+        return redirect(url_for("settings"))
+    db = get_db()
+    try:
+        db.execute(
+            "INSERT INTO person_groups (name, created_at) VALUES (?, ?)",
+            (name, datetime.now().isoformat(timespec="seconds")),
+        )
+        db.commit()
+        flash(f"Gruppe '{name}' angelegt.", "success")
+    except sqlite3.IntegrityError:
+        flash("Diese Gruppe existiert bereits.", "error")
+    return redirect(url_for("settings"))
+
+
+@app.route("/settings/groups/<int:group_id>/delete", methods=["POST"])
+def delete_group(group_id: int) -> Any:
+    db = get_db()
+    row = db.execute("SELECT name FROM person_groups WHERE id = ?", (group_id,)).fetchone()
+    if not row:
+        flash("Gruppe nicht gefunden.", "error")
+        return redirect(url_for("settings"))
+    # Personen dieser Gruppe auf "Keine Gruppe" setzen, nicht löschen
+    db.execute("UPDATE request_persons SET group_id = NULL WHERE group_id = ?", (group_id,))
+    db.execute("DELETE FROM person_groups WHERE id = ?", (group_id,))
+    db.commit()
+    flash(f"Gruppe '{row['name']}' gelöscht. Betroffene Personen wurden keiner Gruppe zugewiesen.", "success")
+    return redirect(url_for("settings"))
+
+
+# ---------------------------------------------------------------------------
+# Routen – Datenbank & Export
+# ---------------------------------------------------------------------------
 
 @app.route("/settings/reset-db", methods=["POST"])
 def reset_database() -> Any:
