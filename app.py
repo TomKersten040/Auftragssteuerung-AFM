@@ -643,27 +643,38 @@ TEMPLATE = r"""
           <div class="panel-body">
             <form method="post" action="{{ url_for('save_entry') }}">
               <div class="form-grid">
-                <div>
-                  <label for="motor_type">Motor</label>
-                  <select id="motor_type" name="motor_type" required>
-                    {% for motor in motor_types %}
-                      <option value="{{ motor }}">{{ motor }}</option>
-                    {% endfor %}
-                  </select>
-                </div>
-
-                <div>
-                  <label for="stator_number">Statornummer</label>
-                  <input id="stator_number" name="stator_number" type="text" placeholder="z. B. 178034055042516700016040" required>
-                </div>
 
                 <div class="full">
-                  <label>Status</label>
-                  <div class="segmented">
-                    <label><input type="radio" name="status" value="iO" checked> iO</label>
-                    <label><input type="radio" name="status" value="niO"> niO</label>
-                    <label><input type="radio" name="status" value="wiO"> wiO</label>
+                  <label>Motoren <span style="color:var(--muted);font-weight:400;font-size:0.88rem;">– mehrere möglich</span></label>
+                  <div id="motor-rows" style="display:grid;gap:8px;">
+                    <div class="motor-row" style="display:grid;grid-template-columns:1fr 2fr 100px 40px;gap:8px;align-items:end;">
+                      <div>
+                        <div style="font-size:0.85rem;font-weight:600;margin-bottom:6px;">Motor</div>
+                        <select name="motor_type">
+                          {% for motor in motor_types %}
+                            <option value="{{ motor }}">{{ motor }}</option>
+                          {% endfor %}
+                        </select>
+                      </div>
+                      <div>
+                        <div style="font-size:0.85rem;font-weight:600;margin-bottom:6px;">Statornummer</div>
+                        <input type="text" name="stator_number" placeholder="z. B. 178034055042516700016040" required>
+                      </div>
+                      <div>
+                        <div style="font-size:0.85rem;font-weight:600;margin-bottom:6px;">Status</div>
+                        <select name="status">
+                          <option value="iO">iO</option>
+                          <option value="niO">niO</option>
+                          <option value="wiO">wiO</option>
+                        </select>
+                      </div>
+                      <div>
+                        <button type="button" class="btn btn-danger btn-icon remove-row-btn" onclick="removeMotorRow(this)" title="Zeile entfernen" disabled style="width:40px;height:50px;border-radius:10px;">✕</button>
+                      </div>
+                    </div>
                   </div>
+                  <button type="button" onclick="addMotorRow()" class="btn btn-secondary"
+                          style="margin-top:8px;width:100%;border-style:dashed;">+ Motor hinzufügen</button>
                 </div>
 
                 <div>
@@ -690,10 +701,16 @@ TEMPLATE = r"""
                   <input type="text" value="{{ current_profile or 'Bitte Profil setzen' }}" disabled>
                 </div>
 
-                <div>
+                <div class="full">
                   <label for="pickup_assigned_to">Abholung zuweisen an</label>
                   <select id="pickup_assigned_to" name="pickup_assigned_to">
                     <option value="">Nicht zugewiesen</option>
+                    {% if groups %}
+                      {% for group in groups %}
+                        <option value="__group__:{{ group.name }}">Gruppe: {{ group.name }}</option>
+                      {% endfor %}
+                      <option disabled>──────────────</option>
+                    {% endif %}
                     {% for group_name, group_persons in grouped_persons %}
                       {% if group_name %}
                         <optgroup label="{{ group_name }}">
@@ -726,6 +743,32 @@ TEMPLATE = r"""
                 <button class="btn btn-primary" type="submit">Eintrag speichern</button>
               </div>
             </form>
+            <script>
+            (function() {
+              function updateRemoveButtons() {
+                var rows = document.querySelectorAll('#motor-rows .motor-row');
+                rows.forEach(function(r) {
+                  r.querySelector('.remove-row-btn').disabled = rows.length <= 1;
+                });
+              }
+              window.addMotorRow = function() {
+                var container = document.getElementById('motor-rows');
+                var first = container.querySelector('.motor-row');
+                var clone = first.cloneNode(true);
+                clone.querySelectorAll('input[type="text"]').forEach(function(el) { el.value = ''; el.removeAttribute('required'); });
+                clone.querySelectorAll('select').forEach(function(el) { el.selectedIndex = 0; });
+                container.appendChild(clone);
+                updateRemoveButtons();
+                clone.querySelector('input[type="text"]').focus();
+              };
+              window.removeMotorRow = function(btn) {
+                var rows = document.querySelectorAll('#motor-rows .motor-row');
+                if (rows.length <= 1) return;
+                btn.closest('.motor-row').remove();
+                updateRemoveButtons();
+              };
+            })();
+            </script>
           </div>
         </section>
 
@@ -853,26 +896,60 @@ TEMPLATE = r"""
             <section class="panel soft">
               <div class="panel-head">
                 <h3>Gruppen verwalten</h3>
-                <p class="note">Gruppen strukturieren die Personenliste in allen Dropdowns.</p>
+                <p class="note">Personen einer Gruppe zuweisen – direkt hier im Gruppenbereich.</p>
               </div>
               <div class="panel-body">
                 <form method="post" action="{{ url_for('add_group') }}">
-                  <div>
-                    <label for="group_name">Gruppenname</label>
-                    <input id="group_name" name="group_name" type="text" placeholder="z. B. EoL, EMO, Messraum" required>
-                  </div>
-                  <div class="actions">
-                    <button class="btn btn-primary" type="submit">Gruppe anlegen</button>
+                  <div style="display:flex;gap:10px;align-items:flex-end;">
+                    <div style="flex:1;">
+                      <label for="group_name">Neue Gruppe</label>
+                      <input id="group_name" name="group_name" type="text" placeholder="z. B. EoL, EMO, Messraum" required>
+                    </div>
+                    <button class="btn btn-primary" type="submit" style="white-space:nowrap;">Gruppe anlegen</button>
                   </div>
                 </form>
                 <div class="list" style="margin-top: 18px;">
                   {% for group in groups %}
-                    <div class="list-item">
-                      <strong>{{ group.name }}</strong>
-                      <form method="post" action="{{ url_for('delete_group', group_id=group.id) }}"
-                            onsubmit="return confirm('Gruppe löschen? Personen in dieser Gruppe werden keiner Gruppe zugewiesen.');">
-                        <button class="btn btn-secondary btn-icon" type="submit" title="Gruppe löschen">🗑️</button>
-                      </form>
+                    {% set members = persons_by_group.get(group.id, []) %}
+                    {% set unassigned = persons_by_group.get(none, []) %}
+                    <div style="border:1px solid var(--border);border-radius:16px;background:white;padding:14px 16px;">
+                      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+                        <strong style="font-size:1rem;">{{ group.name }}</strong>
+                        <form method="post" action="{{ url_for('delete_group', group_id=group.id) }}"
+                              onsubmit="return confirm('Gruppe löschen? Personen werden keiner Gruppe zugewiesen.');">
+                          <button class="btn btn-secondary btn-icon" type="submit" title="Gruppe löschen">🗑️</button>
+                        </form>
+                      </div>
+                      {% if members %}
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">
+                          {% for member in members %}
+                            <form method="post" action="{{ url_for('update_person_group', person_id=member.id) }}" style="display:inline;">
+                              <input type="hidden" name="group_id" value="">
+                              <button type="submit" class="badge badge-requested"
+                                      style="cursor:pointer;border:1px solid rgba(37,99,235,0.2);background:rgba(37,99,235,0.1);color:var(--accent);padding:6px 10px;border-radius:999px;font:inherit;font-size:0.84rem;font-weight:600;"
+                                      title="Aus Gruppe entfernen">
+                                {{ member.name }} &times;
+                              </button>
+                            </form>
+                          {% endfor %}
+                        </div>
+                      {% else %}
+                        <div style="color:var(--muted);font-size:0.88rem;margin-top:8px;">Noch keine Mitglieder</div>
+                      {% endif %}
+                      {% if unassigned %}
+                        <form method="post" action="{{ url_for('add_person_to_group', group_id=group.id) }}"
+                              style="display:flex;gap:8px;align-items:center;margin-top:12px;">
+                          <select name="person_id"
+                                  style="flex:1;padding:7px 10px;border-radius:10px;border:1px solid var(--border);font:inherit;font-size:0.9rem;background:white;">
+                            <option value="">Person hinzufügen ...</option>
+                            {% for person in unassigned %}
+                              <option value="{{ person.id }}">{{ person.name }}</option>
+                            {% endfor %}
+                          </select>
+                          <button class="btn btn-primary" type="submit"
+                                  style="padding:7px 14px;font-size:0.9rem;min-height:auto;white-space:nowrap;">+ Hinzufügen</button>
+                        </form>
+                      {% endif %}
                     </div>
                   {% else %}
                     <div class="empty">Noch keine Gruppen angelegt.</div>
@@ -884,54 +961,36 @@ TEMPLATE = r"""
             {# ---- Personen verwalten ---- #}
             <section class="panel soft">
               <div class="panel-head">
-                <h3>Personen für Anforderung und Profile</h3>
-                <p class="note">Diese Personen erscheinen im Dropdown für Profile und Abholzuweisungen.</p>
+                <h3>Personen verwalten</h3>
+                <p class="note">Diese Personen erscheinen als Profile und in Abholzuweisungen. Gruppe wird über den Gruppenbereich links vergeben.</p>
               </div>
               <div class="panel-body">
                 <form method="post" action="{{ url_for('add_person') }}">
                   <div class="form-grid">
                     <div>
                       <label for="person_name">Name</label>
-                      <input id="person_name" name="person_name" type="text" placeholder="z. B. Max Mustermann" required>
+                      <input id="person_name" name="person_name" type="text" placeholder="z. B. Tom" required>
                     </div>
                     <div>
                       <label for="person_email">E-Mail (optional)</label>
                       <input id="person_email" name="person_email" type="email" placeholder="name@firma.de">
                     </div>
-                    <div class="full">
-                      <label for="person_group_id">Gruppe (optional)</label>
-                      <select id="person_group_id" name="group_id">
-                        <option value="">Keine Gruppe</option>
-                        {% for group in groups %}
-                          <option value="{{ group.id }}">{{ group.name }}</option>
-                        {% endfor %}
-                      </select>
-                    </div>
                   </div>
                   <div class="actions">
-                    <button class="btn btn-primary" type="submit">Person speichern</button>
+                    <button class="btn btn-primary" type="submit">Person anlegen</button>
                   </div>
                 </form>
 
                 <div class="list" style="margin-top: 18px;">
                   {% for person in request_persons %}
-                    <div class="list-item" style="flex-wrap: wrap; gap: 10px;">
-                      <div style="flex: 1; min-width: 120px;">
+                    <div class="list-item">
+                      <div style="flex:1;min-width:120px;">
                         <strong>{{ person.name }}</strong>
-                        <small>{{ person.email or 'Keine E-Mail hinterlegt' }}</small>
+                        <small>
+                          {{ person.email or 'Keine E-Mail' }}
+                          {% if person.group_name %}&nbsp;· Gruppe: {{ person.group_name }}{% endif %}
+                        </small>
                       </div>
-                      <form method="post" action="{{ url_for('update_person_group', person_id=person.id) }}"
-                            style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                        <select name="group_id"
-                                style="padding: 7px 10px; border-radius: 10px; border: 1px solid var(--border); font: inherit; font-size: 0.9rem; background: white;">
-                          <option value="">Keine Gruppe</option>
-                          {% for group in groups %}
-                            <option value="{{ group.id }}" {% if person.group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
-                          {% endfor %}
-                        </select>
-                        <button class="btn btn-secondary" type="submit"
-                                style="padding: 7px 12px; font-size: 0.9rem; min-height: auto;">Gruppe speichern</button>
-                      </form>
                       <form method="post" action="{{ url_for('delete_person', person_id=person.id) }}"
                             onsubmit="return confirm('Person wirklich löschen?');">
                         <button class="btn btn-secondary btn-icon" type="submit" title="Person löschen">🗑️</button>
@@ -1203,6 +1262,7 @@ def init_db() -> None:
     for column_name, definition in {
         "pickup_assigned_to": "TEXT",
         "pickup_assigned_email": "TEXT",
+        "pickup_assigned_group": "TEXT",
         "pickup_requested_by": "TEXT",
         "pickup_requested_date": "TEXT",
         "pickup_requested_time": "TEXT",
@@ -1235,13 +1295,38 @@ def init_db() -> None:
 def entries_table(entries: list[dict[str, Any]], current_profile: str | None, current_view: str) -> str:
     """
     Rendert die Eintrags-Tabelle als HTML-String (wird per |safe im Template ausgegeben).
-    Enthält für jeden Eintrag einen aufklappbaren Editor mit Abholsteuerung.
+    Enthält Mehrfachauswahl per Checkbox, eine Sammelaktions-Leiste sowie
+    für jeden Eintrag einen aufklappbaren Editor mit Abholsteuerung.
     """
     if not entries:
         return '<div class="empty">Keine passenden Einträge vorhanden.</div>'
 
-    # Personen einmalig laden, damit die Schleife nicht für jeden Eintrag erneut abfragt
     persons = get_request_persons()
+    groups = get_groups()
+    next_val = f"/{current_view}"
+
+    assign_opts_html = _assignment_options_html(None, None, persons, groups, placeholder="Person/Gruppe auswählen ...")
+
+    bulk_bar = (
+        '<div id="bulk-bar" style="display:none;align-items:center;gap:12px;flex-wrap:wrap;'
+        'background:white;border:1px solid var(--border);border-radius:16px;'
+        'padding:12px 16px;margin-bottom:12px;">'
+        '<span id="bulk-count" style="font-weight:650;color:var(--accent);min-width:100px;">0 ausgewählt</span>'
+        f'<form id="bulk-form" method="post" action="{url_for("bulk_action")}" style="display:contents;">'
+        f'<input type="hidden" name="next" value="{next_val}">'
+        '<input type="hidden" id="bulk-action-input" name="action" value="">'
+        '<button type="button" class="btn btn-success" onclick="bulkSubmit(\'picked_up\')"'
+        ' style="padding:8px 14px;font-size:0.9rem;min-height:auto;">&#9745; Als abgeholt markieren</button>'
+        '<div style="display:flex;gap:8px;align-items:center;">'
+        f'<select name="assign_to" id="bulk-assign-sel"'
+        f' style="padding:7px 10px;border-radius:10px;border:1px solid var(--border);font:inherit;font-size:0.9rem;">'
+        f'{assign_opts_html}</select>'
+        '<button type="button" class="btn btn-primary" onclick="bulkSubmit(\'assign\')"'
+        ' style="padding:8px 14px;font-size:0.9rem;min-height:auto;">Zuweisen</button>'
+        '</div>'
+        '</form>'
+        '</div>'
+    )
 
     rows = []
     for entry in entries:
@@ -1264,7 +1349,7 @@ def entries_table(entries: list[dict[str, Any]], current_profile: str | None, cu
         if not entry["picked_up"] and current_profile and entry["pickup_assigned_to"] == current_profile and not entry["pickup_started_by"]:
             action_bits.append(
                 f'''<form method="post" action="{url_for('start_pickup', entry_id=entry['id'])}" style="display:inline;">
-<input type="hidden" name="next" value="/{current_view if current_view != 'dashboard' else 'dashboard'}">
+<input type="hidden" name="next" value="{next_val}">
 <button class="btn btn-warning btn-icon" title="Bearbeitung übernehmen" type="submit">▶</button>
 </form>'''
             )
@@ -1277,14 +1362,16 @@ def entries_table(entries: list[dict[str, Any]], current_profile: str | None, cu
         else:
             action_bits.append(
                 f'''<form method="post" action="{url_for('toggle_picked_up', entry_id=entry['id'])}" style="display:inline;">
-<input type="hidden" name="next" value="/{current_view if current_view != 'dashboard' else 'dashboard'}">
+<input type="hidden" name="next" value="{next_val}">
 <label class="btn btn-secondary btn-icon" title="Als abgeholt markieren" style="cursor:pointer;">☐<input type="checkbox" checked onchange="this.form.submit()" style="display:none"></label>
 </form>'''
             )
 
         action_html = "".join(action_bits) or '<span class="muted">—</span>'
         pickup_meta = []
-        if entry["pickup_assigned_to"]:
+        if entry.get("pickup_assigned_group"):
+            pickup_meta.append(f'Zugewiesen an Gruppe: <strong>{escape(entry["pickup_assigned_group"])}</strong>')
+        elif entry["pickup_assigned_to"]:
             pickup_meta.append(f'Zugewiesen an: <strong>{escape(entry["pickup_assigned_to"] or "")}</strong>')
         if entry["pickup_requested_by"]:
             pickup_meta.append(f'Angefordert von: {escape(entry["pickup_requested_by"] or "")}')
@@ -1302,7 +1389,7 @@ def entries_table(entries: list[dict[str, Any]], current_profile: str | None, cu
   <summary>✏️ Bearbeiten &amp; Abholung steuern</summary>
   <div class="editor-body">
     <form method="post" action="{url_for('update_entry', entry_id=entry['id'])}">
-      <input type="hidden" name="next" value="/{current_view if current_view != 'dashboard' else 'dashboard'}">
+      <input type="hidden" name="next" value="{next_val}">
       <div class="form-grid">
         <div>
           <label>Motor</label>
@@ -1343,7 +1430,7 @@ def entries_table(entries: list[dict[str, Any]], current_profile: str | None, cu
         <div>
           <label>Abholung zuweisen an</label>
           <select name="pickup_assigned_to">
-            {_person_options_html(entry['pickup_assigned_to'], persons)}
+            {_assignment_options_html(entry['pickup_assigned_to'], entry.get('pickup_assigned_group'), persons, groups)}
           </select>
         </div>
         <div class="full">
@@ -1378,6 +1465,7 @@ def entries_table(entries: list[dict[str, Any]], current_profile: str | None, cu
 
         rows.append(f'''
 <tr>
+  <td style="width:40px;text-align:center;"><input type="checkbox" class="row-sel" value="{entry['id']}" style="width:18px;height:18px;cursor:pointer;"></td>
   <td>{entry['entry_date']} {entry['entry_time']}</td>
   <td>{entry['motor_type']}</td>
   <td><strong>{entry['stator_number']}</strong></td>
@@ -1391,36 +1479,88 @@ def entries_table(entries: list[dict[str, Any]], current_profile: str | None, cu
   <td>{action_html}</td>
 </tr>
 <tr>
-  <td colspan="11">
+  <td colspan="12">
     <div class="small muted" style="margin-bottom: 8px;">Anmerkungen: {escape(entry['remarks'] or '—')}<br>Abhol-Kommentar: {escape(entry['pickup_request_comment'] or '—')}</div>
     {editor}
   </td>
 </tr>
 ''')
 
+    js = '''<script>
+(function() {
+  var bar = document.getElementById('bulk-bar');
+  var allCb = document.getElementById('select-all-cb');
+  var countEl = document.getElementById('bulk-count');
+  function getChecked() { return document.querySelectorAll('.row-sel:checked'); }
+  function getAllCbs() { return document.querySelectorAll('.row-sel'); }
+  function updateBar() {
+    var n = getChecked().length;
+    countEl.textContent = n + ' ausgewählt';
+    bar.style.display = n > 0 ? 'flex' : 'none';
+  }
+  if (allCb) {
+    allCb.addEventListener('change', function() {
+      getAllCbs().forEach(function(cb) { cb.checked = allCb.checked; });
+      updateBar();
+    });
+  }
+  getAllCbs().forEach(function(cb) {
+    cb.addEventListener('change', function() {
+      var all = getAllCbs();
+      if (allCb) allCb.checked = all.length > 0 && Array.from(all).every(function(c) { return c.checked; });
+      updateBar();
+    });
+  });
+  window.bulkSubmit = function(action) {
+    var checked = getChecked();
+    if (!checked.length) { return; }
+    if (action === 'assign') {
+      var sel = document.getElementById('bulk-assign-sel');
+      if (!sel || !sel.value) { alert('Bitte eine Person auswählen.'); return; }
+    }
+    var form = document.getElementById('bulk-form');
+    document.getElementById('bulk-action-input').value = action;
+    form.querySelectorAll('input[name="entry_ids"]').forEach(function(el) { el.remove(); });
+    checked.forEach(function(cb) {
+      var inp = document.createElement('input');
+      inp.type = 'hidden';
+      inp.name = 'entry_ids';
+      inp.value = cb.value;
+      form.appendChild(inp);
+    });
+    form.submit();
+  };
+})();
+</script>'''
+
     return f'''
-<div class="table-wrap">
-  <table>
-    <thead>
-      <tr>
-        <th>Erfasst am</th>
-        <th>Motor</th>
-        <th>Statornummer</th>
-        <th>Status Motor</th>
-        <th>Lagerort</th>
-        <th>Verantwortlicher</th>
-        <th>Abholstatus</th>
-        <th>Abholinfos</th>
-        <th>Angefordert am</th>
-        <th>Abgeholt am</th>
-        <th>Aktionen</th>
-      </tr>
-    </thead>
-    <tbody>
-      {''.join(rows)}
-    </tbody>
-  </table>
+<div>
+  {bulk_bar}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:40px;text-align:center;"><input type="checkbox" id="select-all-cb" style="width:18px;height:18px;cursor:pointer;" title="Alle auswählen"></th>
+          <th>Erfasst am</th>
+          <th>Motor</th>
+          <th>Statornummer</th>
+          <th>Status Motor</th>
+          <th>Lagerort</th>
+          <th>Verantwortlicher</th>
+          <th>Abholstatus</th>
+          <th>Abholinfos</th>
+          <th>Angefordert am</th>
+          <th>Abgeholt am</th>
+          <th>Aktionen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {''.join(rows)}
+      </tbody>
+    </table>
+  </div>
 </div>
+{js}
 '''
 
 
@@ -1487,6 +1627,53 @@ def _person_options_html(selected: str | None, persons: list[sqlite3.Row]) -> st
     return "".join(html)
 
 
+def _assignment_options_html(
+    selected_person: str | None,
+    selected_group: str | None,
+    persons: list[sqlite3.Row],
+    groups: list[sqlite3.Row],
+    placeholder: str = "Nicht zugewiesen",
+) -> str:
+    """Dropdown mit Gruppen oben (Wert '__group__:Name'), dann Einzelpersonen."""
+    html = [f'<option value="">{escape(placeholder)}</option>']
+    if groups:
+        for g in groups:
+            sel = " selected" if selected_group == g["name"] else ""
+            html.append(f'<option value="__group__:{escape(g["name"])}"{sel}>Gruppe: {escape(g["name"])}</option>')
+        html.append('<option disabled>──────────────</option>')
+    for group_name, group_persons in _group_persons(persons):
+        if group_name:
+            html.append(f'<optgroup label="{escape(group_name)}">')
+        for person in group_persons:
+            sel = " selected" if selected_person == person["name"] else ""
+            html.append(f'<option value="{escape(person["name"])}"{sel}>{escape(person["name"])}</option>')
+        if group_name:
+            html.append("</optgroup>")
+    return "".join(html)
+
+
+def get_person_group_name(person_name: str) -> str | None:
+    """Gibt den Gruppennamen der Person zurück (oder None wenn keine Gruppe)."""
+    if not person_name:
+        return None
+    db = get_db()
+    row = db.execute(
+        "SELECT g.name FROM request_persons r LEFT JOIN person_groups g ON r.group_id = g.id WHERE r.name = ?",
+        (person_name,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def get_persons_by_group() -> dict[int | None, list]:
+    """Gibt Personen gruppiert nach group_id zurück (None = ohne Gruppe)."""
+    persons = get_request_persons()
+    result: dict[int | None, list] = {}
+    for person in persons:
+        gid = person["group_id"]
+        result.setdefault(gid, []).append(person)
+    return result
+
+
 def current_profile() -> str:
     return session.get("profile_name", "").strip()
 
@@ -1507,13 +1694,14 @@ def now_parts() -> tuple[str, str]:
 def derive_pickup_status(row: sqlite3.Row | dict[str, Any]) -> str:
     """
     Leitet den Abholstatus aus den DB-Feldern ab (kein eigenes Statusfeld).
-    Reihenfolge: picked_up → started → assigned → Offen
+    Reihenfolge: picked_up → started → assigned (Person oder Gruppe) → Offen
     """
     if int(row["picked_up"] or 0) == 1:
         return "Abgeholt"
     if row["pickup_started_by"]:
         return "In Bearbeitung"
-    if row["pickup_assigned_to"]:
+    assigned_group = row.get("pickup_assigned_group") if isinstance(row, dict) else None
+    if row["pickup_assigned_to"] or assigned_group:
         return "Angefordert"
     return "Offen"
 
@@ -1564,7 +1752,15 @@ def fetch_entries_for_view(view: str, profile_name: str | None) -> list[dict[str
     if view == "mine":
         if not profile_name:
             return []
-        return [e for e in prepared if int(e["picked_up"] or 0) == 0 and e["pickup_assigned_to"] == profile_name]
+        person_group = get_person_group_name(profile_name)
+        return [
+            e for e in prepared
+            if int(e["picked_up"] or 0) == 0
+            and (
+                e["pickup_assigned_to"] == profile_name
+                or (person_group and e.get("pickup_assigned_group") == person_group)
+            )
+        ]
     if view == "requested":
         return [e for e in prepared if int(e["picked_up"] or 0) == 0 and e["pickup_assigned_to"]]
     if view == "completed":
@@ -1641,14 +1837,16 @@ def render_page(view: str) -> str:
     now = datetime.now()
     profile_name = current_profile()
     persons = get_request_persons()
+    all_groups = get_groups()
     return render_template_string(
         TEMPLATE,
         current_view=view,
         current_profile=profile_name,
         request_persons=persons,
         person_names=[p["name"] for p in persons],
-        groups=get_groups(),
+        groups=all_groups,
         grouped_persons=_group_persons(persons),
+        persons_by_group=get_persons_by_group(),
         motor_types=MOTOR_TYPES,
         storage_locations=STORAGE_LOCATIONS,
         default_date=now.strftime("%Y-%m-%d"),
@@ -1728,63 +1926,80 @@ def save_entry() -> Any:
         flash("Bitte zuerst oben ein Benutzerprofil setzen.", "error")
         return redirect(url_for("dashboard"))
 
-    motor_type = request.form.get("motor_type", "").strip()
-    stator_number = request.form.get("stator_number", "").strip()
-    status = request.form.get("status", "").strip()
     entry_date = request.form.get("entry_date", "").strip()
     entry_time = request.form.get("entry_time", "").strip()
     storage_location = request.form.get("storage_location", "").strip()
     remarks = request.form.get("remarks", "").strip()
-    pickup_assigned_to = request.form.get("pickup_assigned_to", "").strip()
-    pickup_assigned_email = lookup_person_email(pickup_assigned_to) if pickup_assigned_to else ""
     pickup_request_comment = request.form.get("pickup_request_comment", "").strip()
 
-    if motor_type not in MOTOR_TYPES:
-        flash("Ungültiger Motor.", "error")
-        return redirect(url_for("dashboard"))
-    if status not in {"iO", "niO", "wiO"}:
-        flash("Ungültiger Status.", "error")
-        return redirect(url_for("dashboard"))
+    raw_assigned = request.form.get("pickup_assigned_to", "").strip()
+    if raw_assigned.startswith("__group__:"):
+        pickup_assigned_group = raw_assigned[len("__group__:"):]
+        pickup_assigned_to = ""
+        pickup_assigned_email = ""
+    else:
+        pickup_assigned_to = raw_assigned
+        pickup_assigned_group = ""
+        pickup_assigned_email = lookup_person_email(pickup_assigned_to) if pickup_assigned_to else ""
+
+    has_assignment = bool(pickup_assigned_to or pickup_assigned_group)
+
     if storage_location not in STORAGE_LOCATIONS:
         flash("Ungültiger Lagerort.", "error")
         return redirect(url_for("dashboard"))
-    if not stator_number or not entry_date or not entry_time:
+    if not entry_date or not entry_time:
         flash("Bitte alle Pflichtfelder ausfüllen.", "error")
+        return redirect(url_for("dashboard"))
+
+    motor_types_list = request.form.getlist("motor_type")
+    stator_numbers_list = request.form.getlist("stator_number")
+    statuses_list = request.form.getlist("status")
+
+    rows_to_insert = []
+    for motor_type, stator_number, status in zip(motor_types_list, stator_numbers_list, statuses_list):
+        motor_type = motor_type.strip()
+        stator_number = stator_number.strip()
+        status = status.strip()
+        if not stator_number:
+            continue
+        if motor_type not in MOTOR_TYPES:
+            flash(f"Ungültiger Motor: {motor_type}", "error")
+            return redirect(url_for("dashboard"))
+        if status not in {"iO", "niO", "wiO"}:
+            flash(f"Ungültiger Status: {status}", "error")
+            return redirect(url_for("dashboard"))
+        rows_to_insert.append((motor_type, stator_number, status))
+
+    if not rows_to_insert:
+        flash("Bitte mindestens eine Statornummer eingeben.", "error")
         return redirect(url_for("dashboard"))
 
     db = get_db()
     now = datetime.now().isoformat(timespec="seconds")
-    db.execute(
-        """
-        INSERT INTO motor_entries (
-            motor_type, stator_number, status, entry_date, entry_time,
-            storage_location, remarks, responsible_name,
-            pickup_assigned_to, pickup_assigned_email,
-            pickup_requested_by, pickup_requested_date, pickup_requested_time,
-            pickup_request_comment, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            motor_type,
-            stator_number,
-            status,
-            entry_date,
-            entry_time,
-            storage_location,
-            remarks,
-            responsible_name,
-            pickup_assigned_to,
-            pickup_assigned_email,
-            responsible_name if pickup_assigned_to else "",
-            entry_date if pickup_assigned_to else "",
-            entry_time if pickup_assigned_to else "",
-            pickup_request_comment,
-            now,
-            now,
-        ),
-    )
+    for motor_type, stator_number, status in rows_to_insert:
+        db.execute(
+            """
+            INSERT INTO motor_entries (
+                motor_type, stator_number, status, entry_date, entry_time,
+                storage_location, remarks, responsible_name,
+                pickup_assigned_to, pickup_assigned_email, pickup_assigned_group,
+                pickup_requested_by, pickup_requested_date, pickup_requested_time,
+                pickup_request_comment, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                motor_type, stator_number, status, entry_date, entry_time,
+                storage_location, remarks, responsible_name,
+                pickup_assigned_to, pickup_assigned_email, pickup_assigned_group,
+                responsible_name if has_assignment else "",
+                entry_date if has_assignment else "",
+                entry_time if has_assignment else "",
+                pickup_request_comment, now, now,
+            ),
+        )
     db.commit()
-    flash("Eintrag erfolgreich gespeichert.", "success")
+    count = len(rows_to_insert)
+    flash(f"{count} Eintrag/Einträge erfolgreich gespeichert.", "success")
     return redirect(url_for("dashboard"))
 
 
@@ -1803,13 +2018,21 @@ def update_entry(entry_id: int) -> Any:
     entry_time = request.form.get("entry_time", "").strip()
     storage_location = request.form.get("storage_location", "").strip()
     remarks = request.form.get("remarks", "").strip()
-    pickup_assigned_to = request.form.get("pickup_assigned_to", "").strip()
-    pickup_assigned_email = lookup_person_email(pickup_assigned_to) if pickup_assigned_to else ""
     pickup_request_comment = request.form.get("pickup_request_comment", "").strip()
     picked_up = 1 if request.form.get("picked_up") == "1" else 0
     pickup_done_by = request.form.get("pickup_done_by", "").strip()
     pickup_done_date = request.form.get("pickup_done_date", "").strip()
     pickup_done_time = request.form.get("pickup_done_time", "").strip()
+
+    raw_assigned = request.form.get("pickup_assigned_to", "").strip()
+    if raw_assigned.startswith("__group__:"):
+        pickup_assigned_group = raw_assigned[len("__group__:"):]
+        pickup_assigned_to = ""
+        pickup_assigned_email = ""
+    else:
+        pickup_assigned_to = raw_assigned
+        pickup_assigned_group = ""
+        pickup_assigned_email = lookup_person_email(pickup_assigned_to) if pickup_assigned_to else ""
 
     if motor_type not in MOTOR_TYPES or status not in {"iO", "niO", "wiO"} or storage_location not in STORAGE_LOCATIONS:
         flash("Ungültige Eingabedaten erkannt.", "error")
@@ -1822,10 +2045,15 @@ def update_entry(entry_id: int) -> Any:
     pickup_started_date = row["pickup_started_date"] or ""
     pickup_started_time = row["pickup_started_time"] or ""
 
-    if pickup_assigned_to and not row["pickup_assigned_to"]:
+    prev_assigned_to = row["pickup_assigned_to"] or ""
+    prev_assigned_group = row["pickup_assigned_group"] or "" if "pickup_assigned_group" in dict(row) else ""
+    has_prev = bool(prev_assigned_to or prev_assigned_group)
+    has_new = bool(pickup_assigned_to or pickup_assigned_group)
+
+    if has_new and not has_prev:
         pickup_requested_by = current_profile() or row["responsible_name"]
         pickup_requested_date, pickup_requested_time = now_parts()
-    elif not pickup_assigned_to:
+    elif not has_new:
         pickup_requested_by = ""
         pickup_requested_date = ""
         pickup_requested_time = ""
@@ -1836,8 +2064,7 @@ def update_entry(entry_id: int) -> Any:
         if not pickup_done_by:
             pickup_done_date = ""
             pickup_done_time = ""
-
-    if pickup_assigned_to and pickup_assigned_to != (row["pickup_assigned_to"] or ""):
+    elif pickup_assigned_to != prev_assigned_to or pickup_assigned_group != prev_assigned_group:
         pickup_requested_by = current_profile() or row["responsible_name"]
         pickup_requested_date, pickup_requested_time = now_parts()
         pickup_started_by = ""
@@ -1869,6 +2096,7 @@ def update_entry(entry_id: int) -> Any:
             remarks = ?,
             pickup_assigned_to = ?,
             pickup_assigned_email = ?,
+            pickup_assigned_group = ?,
             pickup_requested_by = ?,
             pickup_requested_date = ?,
             pickup_requested_time = ?,
@@ -1893,6 +2121,7 @@ def update_entry(entry_id: int) -> Any:
             remarks,
             pickup_assigned_to,
             pickup_assigned_email,
+            pickup_assigned_group,
             pickup_requested_by,
             pickup_requested_date,
             pickup_requested_time,
@@ -1975,6 +2204,84 @@ def toggle_picked_up(entry_id: int) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Routen – Sammelaktionen
+# ---------------------------------------------------------------------------
+
+@app.route("/entries/bulk", methods=["POST"])
+def bulk_action() -> Any:
+    """Führt eine Sammelaktion (abgeholt markieren oder zuweisen) auf mehreren Einträgen durch."""
+    action = request.form.get("action", "").strip()
+    ids_raw = request.form.getlist("entry_ids")
+    entry_ids = [int(i) for i in ids_raw if i.isdigit()]
+
+    if not entry_ids:
+        flash("Keine Einträge ausgewählt.", "error")
+        return redirect(valid_next())
+
+    db = get_db()
+    now_str = datetime.now().isoformat(timespec="seconds")
+    done_date, done_time = now_parts()
+    profile_name = current_profile()
+
+    if action == "picked_up":
+        count = 0
+        for eid in entry_ids:
+            row = db.execute("SELECT * FROM motor_entries WHERE id = ?", (eid,)).fetchone()
+            if not row or int(row["picked_up"] or 0) == 1:
+                continue
+            done_by = profile_name or row["pickup_started_by"] or row["pickup_assigned_to"] or row["responsible_name"]
+            db.execute(
+                """UPDATE motor_entries
+                   SET picked_up = 1, pickup_done_by = ?, pickup_done_date = ?,
+                       pickup_done_time = ?, updated_at = ?
+                   WHERE id = ?""",
+                (done_by, done_date, done_time, now_str, eid),
+            )
+            count += 1
+        db.commit()
+        flash(f"{count} Motor(en) als abgeholt markiert.", "success")
+
+    elif action == "assign":
+        raw_assign = request.form.get("assign_to", "").strip()
+        if not raw_assign:
+            flash("Bitte eine Person oder Gruppe für die Zuweisung auswählen.", "error")
+            return redirect(valid_next())
+        if raw_assign.startswith("__group__:"):
+            assign_group = raw_assign[len("__group__:"):]
+            assign_to = ""
+            assign_email = ""
+            label = f"Gruppe '{escape(assign_group)}'"
+        else:
+            assign_to = raw_assign
+            assign_group = ""
+            assign_email = lookup_person_email(assign_to)
+            label = f"'{escape(assign_to)}'"
+        req_date, req_time = now_parts()
+        for eid in entry_ids:
+            row = db.execute("SELECT * FROM motor_entries WHERE id = ?", (eid,)).fetchone()
+            if not row:
+                continue
+            db.execute(
+                """UPDATE motor_entries
+                   SET pickup_assigned_to = ?, pickup_assigned_email = ?, pickup_assigned_group = ?,
+                       pickup_requested_by = ?, pickup_requested_date = ?, pickup_requested_time = ?,
+                       pickup_started_by = '', pickup_started_date = '', pickup_started_time = '',
+                       updated_at = ?
+                   WHERE id = ?""",
+                (assign_to, assign_email, assign_group,
+                 profile_name or row["responsible_name"],
+                 req_date, req_time, now_str, eid),
+            )
+        db.commit()
+        flash(f"{len(entry_ids)} Motor(en) zugewiesen an {label}.", "success")
+
+    else:
+        flash("Unbekannte Sammelaktion.", "error")
+
+    return redirect(valid_next())
+
+
+# ---------------------------------------------------------------------------
 # Routen – Personen und Gruppen (Einstellungen)
 # ---------------------------------------------------------------------------
 
@@ -2053,11 +2360,23 @@ def delete_group(group_id: int) -> Any:
     if not row:
         flash("Gruppe nicht gefunden.", "error")
         return redirect(url_for("settings"))
-    # Personen dieser Gruppe auf "Keine Gruppe" setzen, nicht löschen
     db.execute("UPDATE request_persons SET group_id = NULL WHERE group_id = ?", (group_id,))
     db.execute("DELETE FROM person_groups WHERE id = ?", (group_id,))
     db.commit()
     flash(f"Gruppe '{row['name']}' gelöscht. Betroffene Personen wurden keiner Gruppe zugewiesen.", "success")
+    return redirect(url_for("settings"))
+
+
+@app.route("/settings/groups/<int:group_id>/add-person", methods=["POST"])
+def add_person_to_group(group_id: int) -> Any:
+    person_id_str = request.form.get("person_id", "").strip()
+    if not person_id_str or not person_id_str.isdigit():
+        flash("Bitte eine Person auswählen.", "error")
+        return redirect(url_for("settings"))
+    db = get_db()
+    db.execute("UPDATE request_persons SET group_id = ? WHERE id = ?", (group_id, int(person_id_str)))
+    db.commit()
+    flash("Person zur Gruppe hinzugefügt.", "success")
     return redirect(url_for("settings"))
 
 
