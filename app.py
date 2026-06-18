@@ -26,7 +26,7 @@ from typing import Any
 from urllib.parse import quote
 from html import escape
 
-from flask import Flask, flash, g, redirect, render_template_string, request, send_file, session, url_for
+from flask import Flask, flash, g, jsonify, redirect, render_template_string, request, send_file, session, url_for
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "stator_status.db"
@@ -48,7 +48,13 @@ DEFAULT_REQUEST_PERSONS = [
     ("Logistik", ""),
 ]
 
-app = Flask(__name__)
+FRONTEND_DIR = BASE_DIR / "frontend" / "dist"
+
+app = Flask(
+    __name__,
+    static_folder=str(FRONTEND_DIR / "assets"),
+    static_url_path="/assets",
+)
 app.config["SECRET_KEY"] = SECRET_KEY
 
 # ---------------------------------------------------------------------------
@@ -1872,32 +1878,11 @@ def valid_next(default_endpoint: str = "dashboard") -> str:
 
 @app.route("/")
 def root() -> Any:
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/dashboard")
-def dashboard() -> str:
-    return render_page("dashboard")
-
-
-@app.route("/mine")
-def my_pickups() -> str:
-    return render_page("mine")
-
-
-@app.route("/requested")
-def requested_pickups() -> str:
-    return render_page("requested")
-
-
-@app.route("/completed")
-def completed_pickups() -> str:
-    return render_page("completed")
-
-
-@app.route("/settings")
-def settings() -> str:
-    return render_page("settings")
+    """Liefert das React-Frontend (index.html) für alle Seiten-Routen."""
+    index_file = FRONTEND_DIR / "index.html"
+    if not index_file.exists():
+        return "Frontend nicht gebaut. Bitte 'npm run build' in frontend/ ausführen.", 404
+    return send_file(index_file)
 
 
 # ---------------------------------------------------------------------------
@@ -2460,6 +2445,410 @@ def export_csv() -> Any:
             f.write(";".join(sanitized) + "\n")
 
     return send_file(export_path, as_attachment=True, download_name="motor_auftragssteuerung_export.csv")
+
+
+# ---------------------------------------------------------------------------
+# REST-API für React-Frontend
+# ---------------------------------------------------------------------------
+
+@app.route("/api/profile", methods=["GET"])
+def api_get_profile() -> Any:
+    persons = get_request_persons()
+    return jsonify({
+        "profile": current_profile(),
+        "persons": [p["name"] for p in persons],
+    })
+
+
+@app.route("/api/profile", methods=["POST"])
+def api_set_profile() -> Any:
+    name = request.form.get("profile_name", "").strip()
+    if name:
+        session["profile_name"] = name
+    return jsonify({"profile": current_profile()})
+
+
+@app.route("/api/page/<view>")
+def api_page_data(view: str) -> Any:
+    allowed_views = {"dashboard", "mine", "requested", "completed", "settings"}
+    if view not in allowed_views:
+        return jsonify({"error": "Unknown view"}), 400
+    profile_name = current_profile()
+    persons = get_request_persons()
+    all_groups = get_groups()
+    now = datetime.now()
+    entries = fetch_entries_for_view(view, profile_name)
+    return jsonify({
+        "entries": [dict(e) for e in entries],
+        "stats": fetch_stats(profile_name),
+        "status_by_location": fetch_status_by_location(),
+        "request_persons": [dict(p) for p in persons],
+        "groups": [dict(g) for g in all_groups],
+        "motor_types": MOTOR_TYPES,
+        "storage_locations": STORAGE_LOCATIONS,
+        "current_profile": profile_name,
+        "current_view": view,
+        "default_date": now.strftime("%Y-%m-%d"),
+        "default_time": now.strftime("%H:%M"),
+    })
+
+
+@app.route("/api/save", methods=["POST"])
+def api_save_entry() -> Any:
+    responsible_name = current_profile()
+    if not responsible_name:
+        return jsonify({"error": "Kein Profil gesetzt"}), 400
+
+    entry_date = request.form.get("entry_date", "").strip()
+    entry_time = request.form.get("entry_time", "").strip()
+    storage_location = request.form.get("storage_location", "").strip()
+    remarks = request.form.get("remarks", "").strip()
+    pickup_request_comment = request.form.get("pickup_request_comment", "").strip()
+
+    raw_assigned = request.form.get("pickup_assigned_to", "").strip()
+    if raw_assigned.startswith("__group__:"):
+        pickup_assigned_group = raw_assigned[len("__group__:"):]
+        pickup_assigned_to = ""
+        pickup_assigned_email = ""
+    else:
+        pickup_assigned_to = raw_assigned
+        pickup_assigned_group = ""
+        pickup_assigned_email = lookup_person_email(pickup_assigned_to) if pickup_assigned_to else ""
+
+    has_assignment = bool(pickup_assigned_to or pickup_assigned_group)
+
+    if storage_location not in STORAGE_LOCATIONS:
+        return jsonify({"error": "Ungültiger Lagerort"}), 400
+    if not entry_date or not entry_time:
+        return jsonify({"error": "Pflichtfelder fehlen"}), 400
+
+    motor_types_list = request.form.getlist("motor_type")
+    stator_numbers_list = request.form.getlist("stator_number")
+    statuses_list = request.form.getlist("status")
+
+    rows_to_insert = []
+    for motor_type, stator_number, status in zip(motor_types_list, stator_numbers_list, statuses_list):
+        motor_type = motor_type.strip()
+        stator_number = stator_number.strip()
+        status = status.strip()
+        if not stator_number:
+            continue
+        if motor_type not in MOTOR_TYPES or status not in {"iO", "niO", "wiO"}:
+            return jsonify({"error": f"Ungültige Daten: {motor_type}/{status}"}), 400
+        rows_to_insert.append((motor_type, stator_number, status))
+
+    if not rows_to_insert:
+        return jsonify({"error": "Mindestens eine Statornummer erforderlich"}), 400
+
+    db = get_db()
+    now = datetime.now().isoformat(timespec="seconds")
+    for motor_type, stator_number, status in rows_to_insert:
+        db.execute(
+            """
+            INSERT INTO motor_entries (
+                motor_type, stator_number, status, entry_date, entry_time,
+                storage_location, remarks, responsible_name,
+                pickup_assigned_to, pickup_assigned_email, pickup_assigned_group,
+                pickup_requested_by, pickup_requested_date, pickup_requested_time,
+                pickup_request_comment, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                motor_type, stator_number, status, entry_date, entry_time,
+                storage_location, remarks, responsible_name,
+                pickup_assigned_to, pickup_assigned_email, pickup_assigned_group,
+                responsible_name if has_assignment else "",
+                entry_date if has_assignment else "",
+                entry_time if has_assignment else "",
+                pickup_request_comment, now, now,
+            ),
+        )
+    db.commit()
+    return jsonify({"saved": len(rows_to_insert)})
+
+
+@app.route("/api/entry/<int:entry_id>/update", methods=["POST"])
+def api_update_entry(entry_id: int) -> Any:
+    db = get_db()
+    row = db.execute("SELECT * FROM motor_entries WHERE id = ?", (entry_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Nicht gefunden"}), 404
+
+    motor_type = request.form.get("motor_type", "").strip()
+    stator_number = request.form.get("stator_number", "").strip()
+    status = request.form.get("status", "").strip()
+    entry_date = request.form.get("entry_date", "").strip()
+    entry_time = request.form.get("entry_time", "").strip()
+    storage_location = request.form.get("storage_location", "").strip()
+    remarks = request.form.get("remarks", "").strip()
+    pickup_request_comment = request.form.get("pickup_request_comment", "").strip()
+    picked_up = 1 if request.form.get("picked_up") in ("1", "true") else 0
+    pickup_done_by = request.form.get("pickup_done_by", "").strip()
+    pickup_done_date = request.form.get("pickup_done_date", "").strip()
+    pickup_done_time = request.form.get("pickup_done_time", "").strip()
+
+    raw_assigned = request.form.get("pickup_assigned_to", "").strip()
+    if raw_assigned.startswith("__group__:"):
+        pickup_assigned_group = raw_assigned[len("__group__:"):]
+        pickup_assigned_to = ""
+        pickup_assigned_email = ""
+    else:
+        pickup_assigned_to = raw_assigned
+        pickup_assigned_group = ""
+        pickup_assigned_email = lookup_person_email(pickup_assigned_to) if pickup_assigned_to else ""
+
+    if motor_type not in MOTOR_TYPES or status not in {"iO", "niO", "wiO"} or storage_location not in STORAGE_LOCATIONS:
+        return jsonify({"error": "Ungültige Eingabedaten"}), 400
+
+    pickup_requested_by = row["pickup_requested_by"] or ""
+    pickup_requested_date = row["pickup_requested_date"] or ""
+    pickup_requested_time = row["pickup_requested_time"] or ""
+    pickup_started_by = row["pickup_started_by"] or ""
+    pickup_started_date = row["pickup_started_date"] or ""
+    pickup_started_time = row["pickup_started_time"] or ""
+
+    prev_assigned_to = row["pickup_assigned_to"] or ""
+    prev_assigned_group = row["pickup_assigned_group"] or "" if "pickup_assigned_group" in dict(row) else ""
+    has_prev = bool(prev_assigned_to or prev_assigned_group)
+    has_new = bool(pickup_assigned_to or pickup_assigned_group)
+
+    if has_new and not has_prev:
+        pickup_requested_by = current_profile() or row["responsible_name"]
+        pickup_requested_date, pickup_requested_time = now_parts()
+    elif not has_new:
+        pickup_requested_by = ""
+        pickup_requested_date = ""
+        pickup_requested_time = ""
+        pickup_started_by = ""
+        pickup_started_date = ""
+        pickup_started_time = ""
+        picked_up = 0
+        if not pickup_done_by:
+            pickup_done_date = ""
+            pickup_done_time = ""
+    elif pickup_assigned_to != prev_assigned_to or pickup_assigned_group != prev_assigned_group:
+        pickup_requested_by = current_profile() or row["responsible_name"]
+        pickup_requested_date, pickup_requested_time = now_parts()
+        pickup_started_by = ""
+        pickup_started_date = ""
+        pickup_started_time = ""
+        if not picked_up:
+            pickup_done_by = ""
+            pickup_done_date = ""
+            pickup_done_time = ""
+
+    if picked_up and not pickup_done_date:
+        pickup_done_date, pickup_done_time = now_parts()
+        if not pickup_done_by:
+            pickup_done_by = current_profile() or pickup_started_by or pickup_assigned_to or row["responsible_name"]
+    elif not picked_up:
+        pickup_done_by = ""
+        pickup_done_date = ""
+        pickup_done_time = ""
+
+    db.execute(
+        """
+        UPDATE motor_entries
+        SET motor_type=?, stator_number=?, status=?, entry_date=?, entry_time=?,
+            storage_location=?, remarks=?, pickup_assigned_to=?, pickup_assigned_email=?,
+            pickup_assigned_group=?, pickup_requested_by=?, pickup_requested_date=?,
+            pickup_requested_time=?, pickup_request_comment=?, pickup_started_by=?,
+            pickup_started_date=?, pickup_started_time=?, picked_up=?, pickup_done_by=?,
+            pickup_done_date=?, pickup_done_time=?, updated_at=?
+        WHERE id=?
+        """,
+        (
+            motor_type, stator_number, status, entry_date, entry_time,
+            storage_location, remarks, pickup_assigned_to, pickup_assigned_email,
+            pickup_assigned_group, pickup_requested_by, pickup_requested_date,
+            pickup_requested_time, pickup_request_comment, pickup_started_by,
+            pickup_started_date, pickup_started_time, picked_up, pickup_done_by,
+            pickup_done_date, pickup_done_time,
+            datetime.now().isoformat(timespec="seconds"), entry_id,
+        ),
+    )
+    db.commit()
+    return jsonify({"updated": True})
+
+
+@app.route("/api/entry/<int:entry_id>/start", methods=["POST"])
+def api_start_pickup(entry_id: int) -> Any:
+    profile_name = current_profile()
+    if not profile_name:
+        return jsonify({"error": "Kein Profil gesetzt"}), 400
+    db = get_db()
+    row = db.execute("SELECT * FROM motor_entries WHERE id = ?", (entry_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Nicht gefunden"}), 404
+    if row["pickup_assigned_to"] != profile_name:
+        return jsonify({"error": "Nicht zugewiesen"}), 403
+    start_date, start_time = now_parts()
+    db.execute(
+        "UPDATE motor_entries SET pickup_started_by=?, pickup_started_date=?, pickup_started_time=?, updated_at=? WHERE id=?",
+        (profile_name, start_date, start_time, datetime.now().isoformat(timespec="seconds"), entry_id),
+    )
+    db.commit()
+    return jsonify({"started": True})
+
+
+@app.route("/api/entry/<int:entry_id>/toggle-picked-up", methods=["POST"])
+def api_toggle_picked_up(entry_id: int) -> Any:
+    db = get_db()
+    row = db.execute("SELECT * FROM motor_entries WHERE id = ?", (entry_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Nicht gefunden"}), 404
+    if int(row["picked_up"] or 0) == 1:
+        return jsonify({"already_picked_up": True})
+    done_date, done_time = now_parts()
+    done_by = current_profile() or row["pickup_started_by"] or row["pickup_assigned_to"] or row["responsible_name"]
+    db.execute(
+        "UPDATE motor_entries SET picked_up=1, pickup_done_by=?, pickup_done_date=?, pickup_done_time=?, updated_at=? WHERE id=?",
+        (done_by, done_date, done_time, datetime.now().isoformat(timespec="seconds"), entry_id),
+    )
+    db.commit()
+    return jsonify({"picked_up": True})
+
+
+@app.route("/api/entries/bulk", methods=["POST"])
+def api_bulk_action() -> Any:
+    action = request.form.get("action", "").strip()
+    ids_raw = request.form.getlist("entry_ids")
+    entry_ids = [int(i) for i in ids_raw if i.isdigit()]
+    if not entry_ids:
+        return jsonify({"error": "Keine IDs angegeben"}), 400
+
+    db = get_db()
+    now_str = datetime.now().isoformat(timespec="seconds")
+    done_date, done_time = now_parts()
+    profile_name = current_profile()
+
+    if action == "picked_up":
+        count = 0
+        for eid in entry_ids:
+            row = db.execute("SELECT * FROM motor_entries WHERE id = ?", (eid,)).fetchone()
+            if not row or int(row["picked_up"] or 0) == 1:
+                continue
+            done_by = profile_name or row["pickup_started_by"] or row["pickup_assigned_to"] or row["responsible_name"]
+            db.execute(
+                "UPDATE motor_entries SET picked_up=1, pickup_done_by=?, pickup_done_date=?, pickup_done_time=?, updated_at=? WHERE id=?",
+                (done_by, done_date, done_time, now_str, eid),
+            )
+            count += 1
+        db.commit()
+        return jsonify({"updated": count})
+
+    elif action == "assign":
+        raw_assign = request.form.get("assign_to", "").strip()
+        if not raw_assign:
+            return jsonify({"error": "Ziel fehlt"}), 400
+        if raw_assign.startswith("__group__:"):
+            assign_group = raw_assign[len("__group__:"):]
+            assign_to = ""
+            assign_email = ""
+        else:
+            assign_to = raw_assign
+            assign_group = ""
+            assign_email = lookup_person_email(assign_to)
+        req_date, req_time = now_parts()
+        for eid in entry_ids:
+            row = db.execute("SELECT * FROM motor_entries WHERE id = ?", (eid,)).fetchone()
+            if not row:
+                continue
+            db.execute(
+                """UPDATE motor_entries
+                   SET pickup_assigned_to=?, pickup_assigned_email=?, pickup_assigned_group=?,
+                       pickup_requested_by=?, pickup_requested_date=?, pickup_requested_time=?,
+                       pickup_started_by='', pickup_started_date='', pickup_started_time='', updated_at=?
+                   WHERE id=?""",
+                (assign_to, assign_email, assign_group,
+                 profile_name or row["responsible_name"], req_date, req_time, now_str, eid),
+            )
+        db.commit()
+        return jsonify({"assigned": len(entry_ids)})
+
+    return jsonify({"error": "Unbekannte Aktion"}), 400
+
+
+@app.route("/api/settings/persons/add", methods=["POST"])
+def api_add_person() -> Any:
+    name = request.form.get("person_name", "").strip()
+    email = request.form.get("person_email", "").strip()
+    group_id_str = request.form.get("group_id", "").strip()
+    group_id = int(group_id_str) if group_id_str else None
+    if not name:
+        return jsonify({"error": "Name fehlt"}), 400
+    db = get_db()
+    try:
+        db.execute(
+            "INSERT INTO request_persons (name, email, group_id, created_at) VALUES (?, ?, ?, ?)",
+            (name, email, group_id, datetime.now().isoformat(timespec="seconds")),
+        )
+        db.commit()
+        return jsonify({"added": True})
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "Person existiert bereits"}), 409
+
+
+@app.route("/api/settings/persons/<int:person_id>/delete", methods=["POST"])
+def api_delete_person(person_id: int) -> Any:
+    db = get_db()
+    db.execute("DELETE FROM request_persons WHERE id = ?", (person_id,))
+    db.commit()
+    return jsonify({"deleted": True})
+
+
+@app.route("/api/settings/persons/<int:person_id>/group", methods=["POST"])
+def api_update_person_group(person_id: int) -> Any:
+    group_id_str = request.form.get("group_id", "").strip()
+    group_id = int(group_id_str) if group_id_str else None
+    db = get_db()
+    db.execute("UPDATE request_persons SET group_id = ? WHERE id = ?", (group_id, person_id))
+    db.commit()
+    return jsonify({"updated": True})
+
+
+@app.route("/api/settings/groups/add", methods=["POST"])
+def api_add_group() -> Any:
+    name = request.form.get("group_name", "").strip()
+    if not name:
+        return jsonify({"error": "Name fehlt"}), 400
+    db = get_db()
+    try:
+        db.execute(
+            "INSERT INTO person_groups (name, created_at) VALUES (?, ?)",
+            (name, datetime.now().isoformat(timespec="seconds")),
+        )
+        db.commit()
+        return jsonify({"added": True})
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "Gruppe existiert bereits"}), 409
+
+
+@app.route("/api/settings/groups/<int:group_id>/delete", methods=["POST"])
+def api_delete_group(group_id: int) -> Any:
+    db = get_db()
+    db.execute("UPDATE request_persons SET group_id = NULL WHERE group_id = ?", (group_id,))
+    db.execute("DELETE FROM person_groups WHERE id = ?", (group_id,))
+    db.commit()
+    return jsonify({"deleted": True})
+
+
+@app.route("/api/settings/reset-db", methods=["POST"])
+def api_reset_database() -> Any:
+    if request.form.get("confirm_reset") != "yes":
+        return jsonify({"error": "Bestätigung fehlt"}), 400
+    db = get_db()
+    db.execute("DELETE FROM motor_entries")
+    db.execute("DELETE FROM sqlite_sequence WHERE name = 'motor_entries'")
+    db.commit()
+    return jsonify({"reset": True})
+
+
+@app.route("/api/export")
+def api_export_csv() -> Any:
+    return export_csv()
+
+
 
 
 if __name__ == "__main__":
